@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ravinekartet</title>
+<meta name="description" content="Ravinekartet — et åpent atlas over leirravinene i Oslo-regionen. Laboratory for Urban Boundaries.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+/* ==========================================================================
+   Ravinekartet — interface
+   LUB web system: Inter in three weights, an 8px spacing scale, one accent
+   for action only, space before rules. The colour on the map belongs to the
+   data and to the services that draw it; the interface stays ink on paper.
+   ========================================================================== */
+:root{
+  --ink:#1d1d1f; --ink-muted:#6e6e73; --paper:#ffffff; --paper-alt:#f5f5f7; --rule:#d2d2d7;
+  --accent:#b4532a;            /* clay: links and the one action per screen  */
+  --own:#0a84ff;               /* LUB's own records on the map               */
+  --card-shadow:0 1px 2px rgba(0,0,0,.06),0 8px 28px rgba(0,0,0,.10);
+  --dur-instant:100ms; --dur-fast:180ms; --dur-base:260ms; --dur-slow:420ms;
+  --ease-enter:cubic-bezier(.16,1,.30,1); --ease-exit:cubic-bezier(.40,0,1,1); --ease-standard:cubic-bezier(.40,0,.20,1);
+  --frame-top:0px;             /* the Cargo header above the embed: ?top=48 */
+  --gut:16px; --panel:328px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ink:#f5f5f7; --ink-muted:#a1a1a6; --paper:#1c1c1e; --paper-alt:#2c2c2e; --rule:#3a3a3c;
+    --accent:#e0855a; --card-shadow:0 1px 2px rgba(0,0,0,.4),0 8px 28px rgba(0,0,0,.45);
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#f5f5f7; --ink-muted:#a1a1a6; --paper:#1c1c1e; --paper-alt:#2c2c2e; --rule:#3a3a3c;
+  --accent:#e0855a; --card-shadow:0 1px 2px rgba(0,0,0,.4),0 8px 28px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden}
+body{background:var(--paper);color:var(--ink);
+  font:400 14px/1.40 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  font-optical-sizing:auto;letter-spacing:.005em;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+#map{position:absolute;inset:0;background:var(--paper-alt)}
+
+/* ── Panel ─────────────────────────────────────────────────────────────── */
+.panel{position:absolute;z-index:2;left:var(--gut);top:calc(var(--frame-top) + var(--gut));
+  width:var(--panel);max-height:calc(100% - var(--frame-top) - 2*var(--gut));
+  display:flex;flex-direction:column;background:var(--paper);border-radius:18px;box-shadow:var(--card-shadow);
+  overflow:hidden}
+.panel-head{padding:24px 24px 16px}
+.panel-head h1{margin:0;font-size:21px;line-height:1.14;font-weight:600;letter-spacing:-.005em}
+.panel-head p{margin:8px 0 0;color:var(--ink-muted);font-size:14px;line-height:1.40}
+.head-row{display:flex;align-items:baseline;justify-content:space-between;gap:16px}
+.lang{display:flex;gap:4px;font-size:12px;letter-spacing:.01em}
+.lang button{border:0;background:none;padding:4px 8px;border-radius:980px;cursor:pointer;color:var(--ink-muted)}
+.lang button[aria-pressed="true"]{background:var(--paper-alt);color:var(--ink);font-weight:500}
+.sheet-toggle{display:none}
+
+.panel-body{overflow-y:auto;overscroll-behavior:contain;padding:0 24px 24px}
+.group{padding-top:24px}
+.group h2{margin:0 0 8px;font-size:12px;line-height:1.33;font-weight:500;letter-spacing:.01em;color:var(--ink-muted);text-transform:none}
+
+/* background: one segmented pill */
+.seg{display:flex;background:var(--paper-alt);border-radius:980px;padding:4px;gap:4px}
+.seg button{flex:1;border:0;background:none;border-radius:980px;padding:8px 8px;cursor:pointer;font-size:14px;
+  color:var(--ink-muted);transition:background var(--dur-fast) var(--ease-standard),color var(--dur-fast) var(--ease-standard)}
+.seg button[aria-pressed="true"]{background:var(--paper);color:var(--ink);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+
+/* overlay rows */
+.row{padding:8px 0}
+.row-main{display:flex;align-items:center;gap:16px;min-height:32px}
+.row-text{flex:1;min-width:0}
+.row-name{font-size:14px;line-height:1.40;font-weight:400}
+.row-src{font-size:12px;line-height:1.33;letter-spacing:.01em;color:var(--ink-muted)}
+.row-hint{font-size:12px;line-height:1.33;letter-spacing:.01em;color:var(--ink-muted);margin-top:4px;display:none}
+.row.out-of-range .row-hint{display:block}
+.row.out-of-range .row-name{color:var(--ink-muted)}
+.legend-btn{border:0;background:none;padding:4px 0 0;font-size:12px;letter-spacing:.01em;color:var(--accent);cursor:pointer}
+.legend{display:none;margin-top:8px;padding:8px;background:#fff;border-radius:12px;max-height:240px;overflow:auto}
+.legend img{display:block;max-width:100%;height:auto}
+.row.legend-open .legend{display:block}
+
+/* switch */
+.switch{position:relative;flex:none;width:44px;height:26px;border-radius:980px;border:0;cursor:pointer;
+  background:var(--rule);transition:background var(--dur-fast) var(--ease-standard)}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform var(--dur-fast) var(--ease-standard)}
+.switch[aria-checked="true"]{background:var(--ink)}
+.switch[aria-checked="true"]::after{transform:translateX(18px)}
+
+.panel-foot{padding-top:32px;font-size:12px;line-height:1.33;letter-spacing:.01em;color:var(--ink-muted)}
+.panel-foot p{margin:0 0 8px}
+
+/* ── Point info ────────────────────────────────────────────────────────── */
+.info{position:absolute;z-index:3;right:var(--gut);top:calc(var(--frame-top) + var(--gut));
+  width:360px;max-height:calc(100% - var(--frame-top) - 2*var(--gut) - 48px);display:none;flex-direction:column;
+  background:var(--paper);border-radius:18px;box-shadow:var(--card-shadow);overflow:hidden}
+.info.open{display:flex;animation:enter var(--dur-base) var(--ease-enter)}
+.info-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:24px 24px 8px}
+.info-head h2{margin:0;font-size:17px;line-height:1.30;font-weight:600}
+.info-head .coord{margin-top:4px;font-size:12px;letter-spacing:.01em;color:var(--ink-muted);font-variant-numeric:tabular-nums}
+.close{flex:none;width:32px;height:32px;border:0;border-radius:50%;background:var(--paper-alt);cursor:pointer;font-size:17px;line-height:32px}
+.info-body{overflow-y:auto;padding:8px 24px 24px}
+.hit{padding:16px 0 0}
+.hit h3{margin:0 0 8px;font-size:14px;line-height:1.40;font-weight:500}
+.hit iframe{display:block;width:100%;height:160px;border:0;border-radius:12px;background:#fff}
+.hit .props{margin:0;font-size:14px}
+.hit .props div{display:flex;gap:16px;padding:4px 0}
+.hit .props dt{flex:0 0 40%;color:var(--ink-muted)}
+.hit .props dd{margin:0;flex:1;min-width:0;overflow-wrap:anywhere}
+.muted{color:var(--ink-muted)}
+@keyframes enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* ── MapLibre chrome, brought into the same system ─────────────────────── */
+.maplibregl-ctrl-top-right{top:var(--frame-top)}
+.maplibregl-ctrl-group{border-radius:18px !important;box-shadow:var(--card-shadow) !important;background:var(--paper) !important;overflow:hidden}
+.maplibregl-ctrl-group button{width:36px !important;height:36px !important}
+.maplibregl-ctrl-group button+button{border-top:1px solid var(--rule) !important}
+:root[data-theme="dark"] .maplibregl-ctrl-group .maplibregl-ctrl-icon{filter:invert(1)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .maplibregl-ctrl-group .maplibregl-ctrl-icon{filter:invert(1)}}
+.maplibregl-ctrl-scale{border-color:var(--ink-muted) !important;color:var(--ink);background:rgba(255,255,255,.75) !important;font:12px Inter,system-ui,sans-serif !important}
+.maplibregl-ctrl-attrib{font:12px/1.33 Inter,system-ui,sans-serif !important}
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl{margin:0 var(--gut) var(--gut) 0}
+.maplibregl-ctrl-bottom-left .maplibregl-ctrl{margin:0 0 var(--gut) calc(var(--panel) + 2*var(--gut))}
+
+.nomap{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:32px;text-align:center;color:var(--ink-muted)}
+
+/* ── Phone: the panel becomes a sheet at the bottom ────────────────────── */
+@media (max-width: 720px){
+  :root{--gut:16px}
+  .panel{left:var(--gut);right:var(--gut);top:auto;bottom:var(--gut);width:auto;max-height:62%}
+  .panel-head{padding:16px 16px 8px}
+  .panel-head p{display:none}
+  .panel-body{padding:0 16px 16px}
+  .panel.collapsed .panel-body{display:none}
+  .sheet-toggle{display:block;border:0;background:var(--paper-alt);border-radius:980px;padding:8px 16px;margin-top:8px;cursor:pointer;font-size:14px}
+  .info{left:var(--gut);right:var(--gut);width:auto;max-height:55%}
+  .maplibregl-ctrl-bottom-left .maplibregl-ctrl{margin:0 0 calc(var(--gut) + 112px) var(--gut)}
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl{margin:0 var(--gut) calc(var(--gut) + 112px) 0}
+}
+
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:0s !important;transition-duration:0s !important}
+}
+</style>
+</head>
+<body>
+<div id="map" role="region" aria-label="Kart"></div>
+
+<aside class="panel" id="panel">
+  <div class="panel-head">
+    <div class="head-row">
+      <h1>Ravinekartet</h1>
+      <div class="lang" role="group" aria-label="Språk / Language">
+        <button type="button" data-lang="no" aria-pressed="true">NO</button>
+        <button type="button" data-lang="en" aria-pressed="false">EN</button>
+      </div>
+    </div>
+    <p data-t="intro"></p>
+    <button type="button" class="sheet-toggle" id="sheet-toggle" aria-expanded="true" data-t="layers"></button>
+  </div>
+  <div class="panel-body" id="panel-body">
+    <section class="group">
+      <h2 data-t="g_background"></h2>
+      <div class="seg" role="group" id="basemaps"></div>
+    </section>
+    <div id="groups"></div>
+    <footer class="panel-foot">
+      <p data-t="foot"></p>
+      <p><a href="https://www.lub.earth" target="_blank" rel="noopener">Laboratory for Urban Boundaries</a></p>
+    </footer>
+  </div>
+</aside>
+
+<section class="info" id="info" aria-live="polite">
+  <div class="info-head">
+    <div><h2 data-t="info_title"></h2><div class="coord" id="info-coord"></div></div>
+    <button type="button" class="close" id="info-close" aria-label="Lukk">×</button>
+  </div>
+  <div class="info-body" id="info-body"></div>
+</section>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+(function () {
+'use strict';
+
+// ── Words ──────────────────────────────────────────────────────────────
+const T = {
+  no: {
+    intro: 'Et åpent atlas over leirravinene i Oslo-regionen: hvor de er, hva som har skjedd med dem, og hva som former dem i dag. Versjon 0 — grunnlaget.',
+    layers: 'Kartlag', g_background: 'Bakgrunn', g_ravines: 'Raviner', g_ground: 'Grunnen', g_nature: 'Natur', g_hazard: 'Skred', g_lub: 'LUB',
+    zoom_in: 'Zoom inn for å se dette laget.', legend: 'Tegnforklaring', legend_hide: 'Skjul tegnforklaring',
+    info_title: 'På dette stedet', nothing: 'Ingen treff i de synlige lagene her.', loading: 'Henter…', failed: 'Tjenesten svarte ikke.',
+    none_visible: 'Slå på et lag for å se hva som ligger her.',
+    foot: 'Alle bakgrunnsdata hentes direkte fra offentlige karttjenester. Kartet er under utvikling.',
+    empty_own: 'Ingen registreringer ennå.',
+    nomap: 'Kartet trenger WebGL, som denne nettleseren ikke har slått på.'
+  },
+  en: {
+    intro: 'An open atlas of the clay ravines of the Oslo region: where they are, what has happened to them, and what shapes them today. Version 0 — the base.',
+    layers: 'Layers', g_background: 'Background', g_ravines: 'Ravines', g_ground: 'Ground', g_nature: 'Nature', g_hazard: 'Landslides', g_lub: 'LUB',
+    zoom_in: 'Zoom in to see this layer.', legend: 'Legend', legend_hide: 'Hide legend',
+    info_title: 'At this point', nothing: 'Nothing in the visible layers here.', loading: 'Loading…', failed: 'The service did not answer.',
+    none_visible: 'Turn a layer on to see what lies here.',
+    foot: 'All reference data is drawn live from public map services. The map is under development.',
+    empty_own: 'No records yet.',
+    nomap: 'The map needs WebGL, which this browser has not enabled.'
+  }
+};
+let lang = 'no';
+try { const s = localStorage.getItem('rk-lang'); if (s === 'en' || s === 'no') lang = s; } catch (e) {}
+const t = k => T[lang][k] || k;
+
+// The Cargo header above the embed is not ours to know; the embed says it.
+(function frameTop() {
+  const v = new URLSearchParams(location.search).get('top');
+  if (v !== null && /^\d{1,3}$/.test(v)) document.documentElement.style.setProperty('--frame-top', v + 'px');
+})();
+
+// ── Services ───────────────────────────────────────────────────────────
+// Every overlay is a public WMS, asked for in 512px tiles in Web Mercator,
+// so a tile's zoom is the map's zoom. All of them answer cross-origin
+// (checked 28 Oct 2026). Several draw only within a scale range; the WMS
+// picks the sub-layer that fits, and `from` is the zoom where the layer
+// starts to draw, so the panel can say "zoom in" instead of showing nothing.
+const WMS = {
+  ngu_landform: { url: 'https://geo.ngu.no/mapserver/LandformerWMS', attr: 'Landformer: <a href="https://www.ngu.no">NGU</a> (NLOD)' },
+  ngu_marin:    { url: 'https://geo.ngu.no/mapserver/MarinGrenseWMS4', attr: 'Marin grense: <a href="https://www.ngu.no">NGU</a> (NLOD)' },
+  ngu_losm:     { url: 'https://geo.ngu.no/mapserver/LosmasserWMS2', attr: 'Løsmasser: <a href="https://www.ngu.no">NGU</a> (NLOD)' },
+  nve_kvikk:    { url: 'https://kart.nve.no/enterprise/services/SkredKvikkleire2/MapServer/WMSServer', attr: 'Kvikkleire: <a href="https://www.nve.no">NVE</a>' },
+  mdir_hb13:    { url: 'https://kart.miljodirektoratet.no/arcgis/services/naturtyper_hb13/MapServer/WMSServer', attr: 'Naturtyper: <a href="https://www.miljodirektoratet.no">Miljødirektoratet</a> (NLOD)' },
+  mdir_nin:     { url: 'https://kart.miljodirektoratet.no/arcgis/services/naturtyper_nin/MapServer/WMSServer', attr: 'Naturtyper NiN: <a href="https://www.miljodirektoratet.no">Miljødirektoratet</a> (NLOD)' }
+};
+// Scale denominator 150 000 is zoom ~10.9 in 512px Web Mercator tiles.
+const Z150K = 10.9;
+
+// Bottom of the stack first. `layers` may name several WMS layers; the
+// service draws each only inside its own scale range.
+const OVERLAYS = [
+  { id: 'losmasser', group: 'ground', svc: 'ngu_losm', layers: 'Losmasseflate_N1000,Losmasse_flate', opacity: 0.55,
+    name: { no: 'Løsmasser', en: 'Superficial deposits' }, src: 'NGU' },
+  { id: 'marin-leire', group: 'ground', svc: 'ngu_marin', layers: 'Mulig_marin_leire', opacity: 0.6, from: Z150K,
+    name: { no: 'Mulighet for marin leire', en: 'Possible marine clay' }, src: 'NGU' },
+  { id: 'marin-grense', group: 'ground', svc: 'ngu_marin', layers: 'Marin_grense_linjer', opacity: 1, from: Z150K,
+    name: { no: 'Marin grense', en: 'Marine limit' }, src: 'NGU' },
+  { id: 'naturtyper-hb13', group: 'nature', svc: 'mdir_hb13', layers: 'naturtyper_hb13_alle', opacity: 0.7, from: 7.9,
+    name: { no: 'Naturtyper (DN-håndbok 13)', en: 'Habitat types (DN handbook 13)' }, src: 'Miljødirektoratet · Naturbase' },
+  { id: 'naturtyper-nin', group: 'nature', svc: 'mdir_nin', layers: 'naturtyper_nin_alle', opacity: 0.7, from: 7.9,
+    name: { no: 'Naturtyper (NiN)', en: 'Habitat types (NiN)' }, src: 'Miljødirektoratet · Naturbase' },
+  { id: 'kvikkleire', group: 'hazard', svc: 'nve_kvikk', layers: 'KvikkleireKartlagtOmrade,KvikkleireFaregrad', opacity: 0.6,
+    name: { no: 'Kvikkleire: faregrad', en: 'Quick clay: hazard zones' }, src: 'NVE' },
+  { id: 'ravine-dekning', group: 'ravines', svc: 'ngu_landform', layers: 'Dekning_leirravine', opacity: 0.35,
+    name: { no: 'Kartlagt område for raviner', en: 'Area mapped for ravines' }, src: 'NGU · Landformer' },
+  { id: 'skredgroper', group: 'ravines', svc: 'ngu_landform', layers: 'Landformlinjer_leirskredgrop', opacity: 1,
+    name: { no: 'Leirskredgroper', en: 'Clay landslide scars' }, src: 'NGU · Landformer' },
+  { id: 'raviner', group: 'ravines', svc: 'ngu_landform', layers: 'Landformlinjer_leirravine', opacity: 1, on: true,
+    name: { no: 'Leirraviner', en: 'Clay ravines' }, src: 'NGU · Landformer' }
+];
+const GROUPS = ['ravines', 'ground', 'nature', 'hazard', 'lub'];
+const GROUP_KEY = { ravines: 'g_ravines', ground: 'g_ground', nature: 'g_nature', hazard: 'g_hazard', lub: 'g_lub' };
+
+// LUB's own records. Empty until the data model is filled in; see README.
+const OWN = { id: 'lub-raviner', group: 'lub', url: 'data/ravines.geojson', on: true,
+  name: { no: 'Våre registreringer', en: 'Our records' }, src: 'LUB' };
+
+const wmsTile = (svc, layers) => WMS[svc].url
+  + '?service=WMS&version=1.3.0&request=GetMap&format=image/png&transparent=true&styles='
+  + '&crs=EPSG:3857&width=512&height=512&bbox={bbox-epsg-3857}&layers=' + encodeURIComponent(layers);
+const wmsLegend = (svc, layer) => WMS[svc].url
+  + '?service=WMS&version=1.3.0&request=GetLegendGraphic&format=image/png&sld_version=1.1.0&layer=' + encodeURIComponent(layer);
+
+// ── Background maps ────────────────────────────────────────────────────
+const BASEMAPS = [
+  { id: 'gray', name: { no: 'Kart', en: 'Map' } },
+  { id: 'aerial', name: { no: 'Flyfoto', en: 'Aerial' } },
+  { id: 'relief', name: { no: 'Relieff', en: 'Relief' } }
+];
+let basemap = 'gray';
+
+const style = {
+  version: 8,
+  sources: {
+    gray: { type: 'raster', tileSize: 256, maxzoom: 18,
+      tiles: ['https://cache.kartverket.no/v1/wmts/1.0.0/topograatone/default/webmercator/{z}/{y}/{x}.png'],
+      attribution: '© <a href="https://kartverket.no">Kartverket</a>' },
+    aerial: { type: 'raster', tileSize: 256, maxzoom: 19,
+      tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+      attribution: '© <a href="https://www.esri.com">Esri</a>' },
+    // Kartverket's shaded relief of the 1 m model, close in; further out the
+    // relief is shaded here from the national 10 m model.
+    relief1m: { type: 'raster', tileSize: 512, minzoom: 12, maxzoom: 17,
+      tiles: ['https://wms.geonorge.no/skwms1/wms.hoyde-dtm-nhm-25833?service=WMS&version=1.3.0&request=GetMap'
+        + '&layers=NHM_DTM_25833%3Askyggerelieff&styles=&format=image%2Fpng&crs=EPSG%3A3857&width=512&height=512&bbox={bbox-epsg-3857}'],
+      attribution: '© <a href="https://kartverket.no">Kartverket</a>' },
+    dem: { type: 'raster-dem', encoding: 'terrarium', tileSize: 256, maxzoom: 15,
+      tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+      attribution: 'Høyde: Kartverket / Tilezen' }
+  },
+  layers: [
+    { id: 'ground', type: 'background', paint: { 'background-color': '#e9e9ec' } },
+    { id: 'gray', type: 'raster', source: 'gray', layout: { visibility: 'visible' } },
+    { id: 'aerial', type: 'raster', source: 'aerial', layout: { visibility: 'none' } },
+    { id: 'relief-shade', type: 'hillshade', source: 'dem', layout: { visibility: 'none' },
+      paint: { 'hillshade-illumination-direction': 315, 'hillshade-exaggeration': 0.8,
+               'hillshade-shadow-color': '#000000', 'hillshade-highlight-color': '#ffffff', 'hillshade-accent-color': '#000000' } },
+    { id: 'relief1m', type: 'raster', source: 'relief1m', minzoom: 12, layout: { visibility: 'none' },
+      paint: { 'raster-contrast': 0.3, 'raster-opacity': ['interpolate', ['linear'], ['zoom'], 12, 0, 13, 1] } }
+  ]
+};
+const BASE_LAYERS = { gray: ['gray'], aerial: ['aerial'], relief: ['relief-shade', 'relief1m'] };
+
+OVERLAYS.forEach(o => {
+  style.sources[o.id] = { type: 'raster', tileSize: 512, tiles: [wmsTile(o.svc, o.layers)], attribution: WMS[o.svc].attr };
+  style.layers.push({ id: o.id, type: 'raster', source: o.id,
+    layout: { visibility: o.on ? 'visible' : 'none' }, paint: { 'raster-opacity': o.opacity, 'raster-fade-duration': 0 } });
+});
+
+// ── The map ────────────────────────────────────────────────────────────
+let map;
+try {
+  map = new maplibregl.Map({
+    container: 'map', style: style,
+    center: [10.92, 59.97], zoom: 10.2, minZoom: 6, maxZoom: 19, maxPitch: 70,
+    hash: 'v', attributionControl: false, dragRotate: true, touchPitch: true
+  });
+} catch (err) {
+  document.getElementById('map').innerHTML = '<div class="nomap">' + t('nomap') + '</div>';
+  console.error('Map could not start:', err);
+  return;
+}
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
+map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+
+map.on('load', () => {
+  // The attribution starts folded into its (i); it opens on a tap.
+  document.querySelectorAll('.maplibregl-ctrl-attrib').forEach(el => el.classList.remove('maplibregl-compact-show'));
+  map.addSource(OWN.id, { type: 'geojson', data: OWN.url, attribution: 'Laboratory for Urban Boundaries' });
+  map.addLayer({ id: OWN.id + '-fill', type: 'fill', source: OWN.id, filter: ['==', ['geometry-type'], 'Polygon'],
+    paint: { 'fill-color': '#0a84ff', 'fill-opacity': 0.15 } });
+  map.addLayer({ id: OWN.id + '-line', type: 'line', source: OWN.id,
+    paint: { 'line-color': '#0a84ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.5, 16, 4] } });
+  map.addLayer({ id: OWN.id + '-point', type: 'circle', source: OWN.id, filter: ['==', ['geometry-type'], 'Point'],
+    paint: { 'circle-color': '#ffffff', 'circle-stroke-color': '#0a84ff', 'circle-stroke-width': 2, 'circle-radius': 5 } });
+  fetch(OWN.url).then(r => r.json()).then(fc => {
+    ownCount = (fc.features || []).length; renderPanel();
+  }).catch(() => {});
+});
+const OWN_LAYERS = [OWN.id + '-fill', OWN.id + '-line', OWN.id + '-point'];
+let ownCount = null;
+
+// ── Panel ──────────────────────────────────────────────────────────────
+const state = { on: new Set(OVERLAYS.filter(o => o.on).map(o => o.id)), own: true, legends: new Set() };
+
+function setBasemap(id) {
+  basemap = id;
+  Object.entries(BASE_LAYERS).forEach(([k, ids]) =>
+    ids.forEach(l => map.setLayoutProperty(l, 'visibility', k === id ? 'visible' : 'none')));
+  renderBasemaps();
+}
+function renderBasemaps() {
+  const el = document.getElementById('basemaps');
+  el.innerHTML = '';
+  BASEMAPS.forEach(b => {
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.textContent = b.name[lang];
+    btn.setAttribute('aria-pressed', String(b.id === basemap));
+    btn.addEventListener('click', () => setBasemap(b.id));
+    el.appendChild(btn);
+  });
+}
+
+function row(o, checked, onToggle, extra) {
+  const r = document.createElement('div');
+  r.className = 'row'; r.dataset.id = o.id;
+  const main = document.createElement('div'); main.className = 'row-main';
+  const text = document.createElement('div'); text.className = 'row-text';
+  const nm = document.createElement('div'); nm.className = 'row-name'; nm.textContent = o.name[lang];
+  const src = document.createElement('div'); src.className = 'row-src'; src.textContent = o.src;
+  text.append(nm, src);
+  const sw = document.createElement('button');
+  sw.type = 'button'; sw.className = 'switch'; sw.setAttribute('role', 'switch');
+  sw.setAttribute('aria-checked', String(checked)); sw.setAttribute('aria-label', o.name[lang]);
+  sw.addEventListener('click', () => onToggle(sw.getAttribute('aria-checked') !== 'true'));
+  main.append(text, sw); r.appendChild(main);
+  if (extra) extra(r, text);
+  return r;
+}
+
+function renderPanel() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll('[data-t]').forEach(el => { el.textContent = t(el.dataset.t); });
+  document.querySelectorAll('.lang button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.lang === lang)));
+  renderBasemaps();
+  const host = document.getElementById('groups');
+  host.innerHTML = '';
+  GROUPS.forEach(g => {
+    const sec = document.createElement('section'); sec.className = 'group';
+    const h = document.createElement('h2'); h.textContent = t(GROUP_KEY[g]); sec.appendChild(h);
+    // Top of the map stack first in the panel.
+    OVERLAYS.filter(o => o.group === g).slice().reverse().forEach(o => {
+      sec.appendChild(row(o, state.on.has(o.id), on => toggleOverlay(o, on), (r, text) => {
+        const hint = document.createElement('div'); hint.className = 'row-hint'; hint.textContent = t('zoom_in');
+        text.appendChild(hint);
+        const lb = document.createElement('button'); lb.type = 'button'; lb.className = 'legend-btn';
+        const open = state.legends.has(o.id);
+        lb.textContent = open ? t('legend_hide') : t('legend');
+        lb.setAttribute('aria-expanded', String(open));
+        lb.addEventListener('click', () => { open ? state.legends.delete(o.id) : state.legends.add(o.id); renderPanel(); });
+        text.appendChild(lb);
+        const leg = document.createElement('div'); leg.className = 'legend';
+        if (open) o.layers.split(',').forEach(l => {
+          const img = new Image(); img.alt = ''; img.loading = 'lazy'; img.src = wmsLegend(o.svc, l);
+          img.onerror = () => img.remove(); leg.appendChild(img);
+        });
+        r.appendChild(leg);
+        if (open) r.classList.add('legend-open');
+      }));
+    });
+    if (g === 'lub') sec.appendChild(row(OWN, state.own, on => {
+      state.own = on; OWN_LAYERS.forEach(l => map.getLayer(l) && map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'));
+      renderPanel();
+    }, (r, text) => {
+      if (ownCount === 0) { const e = document.createElement('div'); e.className = 'row-src'; e.textContent = t('empty_own'); text.appendChild(e); }
+    }));
+    host.appendChild(sec);
+  });
+  updateRanges();
+}
+
+function toggleOverlay(o, on) {
+  on ? state.on.add(o.id) : state.on.delete(o.id);
+  map.setLayoutProperty(o.id, 'visibility', on ? 'visible' : 'none');
+  renderPanel();
+}
+function updateRanges() {
+  const z = map.getZoom();
+  OVERLAYS.forEach(o => {
+    const r = document.querySelector('.row[data-id="' + o.id + '"]');
+    if (r) r.classList.toggle('out-of-range', !!o.from && z < o.from);
+  });
+}
+map.on('zoomend', updateRanges);
+
+document.querySelectorAll('.lang button').forEach(b => b.addEventListener('click', () => {
+  lang = b.dataset.lang;
+  try { localStorage.setItem('rk-lang', lang); } catch (e) {}
+  renderPanel();
+}));
+const panel = document.getElementById('panel');
+const sheetBtn = document.getElementById('sheet-toggle');
+const phone = window.matchMedia('(max-width: 720px)');
+function setSheet(collapsed) {
+  panel.classList.toggle('collapsed', collapsed);
+  sheetBtn.setAttribute('aria-expanded', String(!collapsed));
+}
+sheetBtn.addEventListener('click', () => setSheet(!panel.classList.contains('collapsed')));
+if (phone.matches) setSheet(true);
+
+// ── What lies here: GetFeatureInfo on the visible overlays ─────────────
+// A small window around the click at the map's own resolution, so the query
+// holds when the map is turned or tilted. The services answer in HTML, which
+// is shown in a sandboxed frame: their markup never runs in this page.
+const info = document.getElementById('info');
+document.getElementById('info-close').addEventListener('click', () => info.classList.remove('open'));
+
+function featureInfoURL(o, lngLat) {
+  const c = maplibregl.MercatorCoordinate.fromLngLat(lngLat);
+  const x = (c.x - 0.5) * 40075016.68557849, y = (0.5 - c.y) * 40075016.68557849;
+  const res = 78271.51696402048 / Math.pow(2, map.getZoom()), half = 50 * res;
+  const bbox = [x - half, y - half, x + half, y + half].join(',');
+  return WMS[o.svc].url + '?service=WMS&version=1.3.0&request=GetFeatureInfo&styles=&crs=EPSG:3857'
+    + '&bbox=' + bbox + '&width=101&height=101&i=50&j=50&feature_count=5&info_format=text/html'
+    + '&layers=' + encodeURIComponent(o.layers) + '&query_layers=' + encodeURIComponent(o.layers);
+}
+function hasContent(html) {
+  const s = html.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+  return s.length > 3 && !/^(no features|search returned no results)/i.test(s);
+}
+function hit(title) {
+  const d = document.createElement('div'); d.className = 'hit';
+  const h = document.createElement('h3'); h.textContent = title; d.appendChild(h);
+  return d;
+}
+
+map.on('click', e => {
+  const body = document.getElementById('info-body');
+  body.innerHTML = '';
+  document.getElementById('info-coord').textContent =
+    e.lngLat.lat.toFixed(5) + ' N, ' + e.lngLat.lng.toFixed(5) + ' E';
+  info.classList.add('open');
+  if (phone.matches) setSheet(true);
+
+  let found = 0, pending = 0;
+  const status = document.createElement('p'); status.className = 'muted'; body.appendChild(status);
+  const done = () => { if (--pending === 0 && !found) status.textContent = t('nothing'); else if (pending === 0) status.remove(); };
+
+  // Our own records first.
+  if (state.own) map.queryRenderedFeatures(e.point, { layers: OWN_LAYERS.filter(l => map.getLayer(l)) }).forEach(f => {
+    const d = hit(f.properties.name || f.properties.ravine_id || OWN.name[lang]);
+    const dl = document.createElement('dl'); dl.className = 'props';
+    Object.entries(f.properties).forEach(([k, v]) => {
+      const row = document.createElement('div'); const dt = document.createElement('dt'); const dd = document.createElement('dd');
+      dt.textContent = k; dd.textContent = v; row.append(dt, dd); dl.appendChild(row);
+    });
+    d.appendChild(dl); body.appendChild(d); found++;
+  });
+
+  const z = map.getZoom();
+  const visible = OVERLAYS.filter(o => state.on.has(o.id) && !(o.from && z < o.from)).reverse();
+  if (!visible.length) { status.textContent = found ? '' : t('none_visible'); return; }
+  status.textContent = t('loading');
+  pending = visible.length;
+  visible.forEach(o => {
+    fetch(featureInfoURL(o, e.lngLat)).then(r => r.ok ? r.text() : Promise.reject(r.status)).then(html => {
+      if (!hasContent(html)) return;
+      const d = hit(o.name[lang] + ' · ' + o.src);
+      const f = document.createElement('iframe');
+      f.setAttribute('sandbox', ''); f.setAttribute('referrerpolicy', 'no-referrer'); f.title = o.name[lang];
+      f.srcdoc = '<base target="_blank"><style>body{font:13px/1.4 Inter,system-ui,sans-serif;margin:8px;color:#1d1d1f}table{border-collapse:collapse;font-size:12px}td,th{padding:2px 6px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}</style>' + html;
+      d.appendChild(f); body.appendChild(d); found++;
+    }).catch(() => {}).finally(done);
+  });
+});
+
+renderPanel();
+})();
+</script>
+</body>
+</html>
