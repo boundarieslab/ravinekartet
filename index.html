@@ -68,7 +68,7 @@ button{font:inherit;color:inherit}
 
 /* background: one segmented pill */
 .seg{display:flex;background:var(--paper-alt);border-radius:980px;padding:4px;gap:4px}
-.seg button{flex:1;border:0;background:none;border-radius:980px;padding:8px 8px;cursor:pointer;font-size:14px;
+.seg button{flex:1;min-width:0;border:0;background:none;border-radius:980px;padding:8px 4px;cursor:pointer;font-size:14px;
   color:var(--ink-muted);transition:background var(--dur-fast) var(--ease-standard),color var(--dur-fast) var(--ease-standard)}
 .seg button[aria-pressed="true"]{background:var(--paper);color:var(--ink);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.08)}
 
@@ -187,6 +187,7 @@ button{font:inherit;color:inherit}
 </section>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/maplibre-contour@0.1.1/dist/index.min.js"></script>
 <script>
 (function () {
 'use strict';
@@ -195,22 +196,28 @@ button{font:inherit;color:inherit}
 const T = {
   no: {
     intro: 'Et åpent atlas over leirravinene i Oslo-regionen: hvor de er, hva som har skjedd med dem, og hva som former dem i dag. Versjon 0 — grunnlaget.',
-    layers: 'Kartlag', g_background: 'Bakgrunn', g_ravines: 'Raviner', g_ground: 'Grunnen', g_nature: 'Natur', g_hazard: 'Skred', g_lub: 'LUB',
+    layers: 'Kartlag', g_background: 'Bakgrunn', g_ravines: 'Raviner', g_water: 'Vann', g_ground: 'Grunnen', g_nature: 'Natur', g_hazard: 'Skred', g_lub: 'LUB',
     zoom_in: 'Zoom inn for å se dette laget.', legend: 'Tegnforklaring', legend_hide: 'Skjul tegnforklaring',
     info_title: 'På dette stedet', nothing: 'Ingen treff i de synlige lagene her.', loading: 'Henter…', failed: 'Tjenesten svarte ikke.',
     none_visible: 'Slå på et lag for å se hva som ligger her.',
     foot: 'Alle bakgrunnsdata hentes direkte fra offentlige karttjenester. Kartet er under utvikling.',
     empty_own: 'Ingen registreringer ennå.',
+    streams_note: 'Strekbredde etter Strahler-orden. Fra zoom 9 vises bare de større vassdragene.',
+    contours_note: 'Beregnet fra Kartverkets 10 m terrengmodell.',
+    order: 'Strahler-orden', river: 'Elv/bekk', lake: 'Innsjø', unnamed: 'Uten navn',
     nomap: 'Kartet trenger WebGL, som denne nettleseren ikke har slått på.'
   },
   en: {
     intro: 'An open atlas of the clay ravines of the Oslo region: where they are, what has happened to them, and what shapes them today. Version 0 — the base.',
-    layers: 'Layers', g_background: 'Background', g_ravines: 'Ravines', g_ground: 'Ground', g_nature: 'Nature', g_hazard: 'Landslides', g_lub: 'LUB',
+    layers: 'Layers', g_background: 'Background', g_ravines: 'Ravines', g_water: 'Water', g_ground: 'Ground', g_nature: 'Nature', g_hazard: 'Landslides', g_lub: 'LUB',
     zoom_in: 'Zoom in to see this layer.', legend: 'Legend', legend_hide: 'Hide legend',
     info_title: 'At this point', nothing: 'Nothing in the visible layers here.', loading: 'Loading…', failed: 'The service did not answer.',
     none_visible: 'Turn a layer on to see what lies here.',
     foot: 'All reference data is drawn live from public map services. The map is under development.',
     empty_own: 'No records yet.',
+    streams_note: 'Line width follows Strahler order. From zoom 9 only the larger watercourses are shown.',
+    contours_note: 'Computed from Kartverket’s 10 m terrain model.',
+    order: 'Strahler order', river: 'River/stream', lake: 'Lake', unnamed: 'Unnamed',
     nomap: 'The map needs WebGL, which this browser has not enabled.'
   }
 };
@@ -224,12 +231,19 @@ const t = k => T[lang][k] || k;
   if (v !== null && /^\d{1,3}$/.test(v)) document.documentElement.style.setProperty('--frame-top', v + 'px');
 })();
 
+// ── Colour of the data ─────────────────────────────────────────────────
+// Water and ravines share one blue: the ravine is the water system cut into
+// the clay. The background decides only how dark the ground is.
+const BLUE = '#2f7cf6';
+const WATER = {
+  dark:  { stream: '#3d8bff', lake: '#bcd6ff', contour: 'rgba(255,255,255,0.16)', index: 'rgba(255,255,255,0.34)', label: '#d0d0d4', halo: '#1b1b1e' },
+  light: { stream: '#1f6fe5', lake: '#a9cbfa', contour: 'rgba(29,29,31,0.18)', index: 'rgba(29,29,31,0.40)', label: '#4a4a4f', halo: '#ffffff' }
+};
+
 // ── Services ───────────────────────────────────────────────────────────
-// Every overlay is a public WMS, asked for in 512px tiles in Web Mercator,
-// so a tile's zoom is the map's zoom. All of them answer cross-origin
-// (checked 28 Oct 2026). Several draw only within a scale range; the WMS
-// picks the sub-layer that fits, and `from` is the zoom where the layer
-// starts to draw, so the panel can say "zoom in" instead of showing nothing.
+// Every raster overlay is a public WMS, asked for in 512px tiles in Web
+// Mercator, so a tile's zoom is the map's zoom. All answer cross-origin
+// (checked 28 Oct 2026). `from` is the zoom where a layer starts to draw.
 const WMS = {
   ngu_landform: { url: 'https://geo.ngu.no/mapserver/LandformerWMS', attr: 'Landformer: <a href="https://www.ngu.no">NGU</a> (NLOD)' },
   ngu_marin:    { url: 'https://geo.ngu.no/mapserver/MarinGrenseWMS4', attr: 'Marin grense: <a href="https://www.ngu.no">NGU</a> (NLOD)' },
@@ -238,36 +252,65 @@ const WMS = {
   mdir_hb13:    { url: 'https://kart.miljodirektoratet.no/arcgis/services/naturtyper_hb13/MapServer/WMSServer', attr: 'Naturtyper: <a href="https://www.miljodirektoratet.no">Miljødirektoratet</a> (NLOD)' },
   mdir_nin:     { url: 'https://kart.miljodirektoratet.no/arcgis/services/naturtyper_nin/MapServer/WMSServer', attr: 'Naturtyper NiN: <a href="https://www.miljodirektoratet.no">Miljødirektoratet</a> (NLOD)' }
 };
-// Scale denominator 150 000 is zoom ~10.9 in 512px Web Mercator tiles.
-const Z150K = 10.9;
+const Z150K = 10.9;   // scale 1:150 000 in 512px Web Mercator tiles
 
-// Bottom of the stack first. `layers` may name several WMS layers; the
-// service draws each only inside its own scale range.
+// Vector feeds: NVE's ArcGIS services answer queries as GeoJSON, so rivers
+// and lakes are drawn here, in our colours, and can be clicked.
+const NVE = 'https://kart.nve.no/enterprise/rest/services';
+const FEEDS = {
+  streams: {
+    url: NVE + '/Elvenett1/MapServer/2/query', minzoom: 9,
+    // Far out only the larger watercourses, in large tiles; close in all of them.
+    tz: z => z >= 11 ? 12 : 10,
+    where: tz => tz >= 12 ? "objekttype <> 'ElvelinjeFiktiv'" : "elveordenstrahler >= 3 AND objekttype <> 'ElvelinjeFiktiv'",
+    fields: 'objectid,elvenavn,elveordenstrahler,objekttype',
+    attr: 'Elvenett: <a href="https://www.nve.no">NVE</a>'
+  },
+  lakes: {
+    url: NVE + '/Innsjodatabase2/MapServer/5/query', minzoom: 8,
+    tz: () => 10, where: () => '1=1', fields: '*',
+    attr: 'Innsjødatabasen: <a href="https://www.nve.no">NVE</a>'
+  }
+};
+
+// Every layer in the panel. Bottom of the map stack first.
+// kind: 'wms' (a raster from a WMS), 'feed' (vector from FEEDS), 'contours'.
 const OVERLAYS = [
-  { id: 'losmasser', group: 'ground', svc: 'ngu_losm', layers: 'Losmasseflate_N1000,Losmasse_flate', opacity: 0.55,
+  { id: 'losmasser', kind: 'wms', group: 'ground', svc: 'ngu_losm', layers: 'Losmasseflate_N1000,Losmasse_flate', opacity: 0.55,
     name: { no: 'Løsmasser', en: 'Superficial deposits' }, src: 'NGU' },
-  { id: 'marin-leire', group: 'ground', svc: 'ngu_marin', layers: 'Mulig_marin_leire', opacity: 0.6, from: Z150K,
+  { id: 'marin-leire', kind: 'wms', group: 'ground', svc: 'ngu_marin', layers: 'Mulig_marin_leire', opacity: 0.6, from: Z150K,
     name: { no: 'Mulighet for marin leire', en: 'Possible marine clay' }, src: 'NGU' },
-  { id: 'marin-grense', group: 'ground', svc: 'ngu_marin', layers: 'Marin_grense_linjer', opacity: 1, from: Z150K,
-    name: { no: 'Marin grense', en: 'Marine limit' }, src: 'NGU' },
-  { id: 'naturtyper-hb13', group: 'nature', svc: 'mdir_hb13', layers: 'naturtyper_hb13_alle', opacity: 0.7, from: 7.9,
+  { id: 'naturtyper-hb13', kind: 'wms', group: 'nature', svc: 'mdir_hb13', layers: 'naturtyper_hb13_alle', opacity: 0.7, from: 7.9,
     name: { no: 'Naturtyper (DN-håndbok 13)', en: 'Habitat types (DN handbook 13)' }, src: 'Miljødirektoratet · Naturbase' },
-  { id: 'naturtyper-nin', group: 'nature', svc: 'mdir_nin', layers: 'naturtyper_nin_alle', opacity: 0.7, from: 7.9,
+  { id: 'naturtyper-nin', kind: 'wms', group: 'nature', svc: 'mdir_nin', layers: 'naturtyper_nin_alle', opacity: 0.7, from: 7.9,
     name: { no: 'Naturtyper (NiN)', en: 'Habitat types (NiN)' }, src: 'Miljødirektoratet · Naturbase' },
-  { id: 'kvikkleire', group: 'hazard', svc: 'nve_kvikk', layers: 'KvikkleireKartlagtOmrade,KvikkleireFaregrad', opacity: 0.6,
+  { id: 'kvikkleire', kind: 'wms', group: 'hazard', svc: 'nve_kvikk', layers: 'KvikkleireKartlagtOmrade,KvikkleireFaregrad', opacity: 0.6,
     name: { no: 'Kvikkleire: faregrad', en: 'Quick clay: hazard zones' }, src: 'NVE' },
-  { id: 'ravine-dekning', group: 'ravines', svc: 'ngu_landform', layers: 'Dekning_leirravine', opacity: 0.35,
+  { id: 'hoydekurver', kind: 'contours', group: 'ground', on: true, from: 11,
+    name: { no: 'Høydekurver', en: 'Contour lines' }, src: 'Kartverket · DTM 10', note: 'contours_note' },
+  { id: 'marin-grense', kind: 'wms', group: 'ground', svc: 'ngu_marin', layers: 'Marin_grense_linjer', opacity: 1, from: Z150K,
+    name: { no: 'Marin grense', en: 'Marine limit' }, src: 'NGU' },
+  { id: 'ravine-dekning', kind: 'wms', group: 'ravines', svc: 'ngu_landform', layers: 'Dekning_leirravine', opacity: 0.35,
     name: { no: 'Kartlagt område for raviner', en: 'Area mapped for ravines' }, src: 'NGU · Landformer' },
-  { id: 'skredgroper', group: 'ravines', svc: 'ngu_landform', layers: 'Landformlinjer_leirskredgrop', opacity: 1,
+  { id: 'ravine-lokaliteter', kind: 'wms', group: 'ravines', svc: 'ngu_landform', layers: 'Landformtyper_temakart_flater', opacity: 0.55,
+    name: { no: 'Verdivurderte ravinelokaliteter', en: 'Assessed ravine localities' }, src: 'NGU · Landformer' },
+  { id: 'innsjoer', kind: 'feed', feed: 'lakes', group: 'water', on: true, from: 8,
+    name: { no: 'Innsjøer', en: 'Lakes' }, src: 'NVE · Innsjødatabasen' },
+  { id: 'elver', kind: 'feed', feed: 'streams', group: 'water', on: true, from: 9,
+    name: { no: 'Elver og bekker', en: 'Rivers and streams' }, src: 'NVE · Elvenett', note: 'streams_note' },
+  { id: 'skredgroper', kind: 'wms', group: 'ravines', svc: 'ngu_landform', layers: 'Landformlinjer_leirskredgrop', opacity: 0.9,
     name: { no: 'Leirskredgroper', en: 'Clay landslide scars' }, src: 'NGU · Landformer' },
-  { id: 'raviner', group: 'ravines', svc: 'ngu_landform', layers: 'Landformlinjer_leirravine', opacity: 1, on: true,
+  // NGU draws the ravines in black; they are recoloured here (see `tint`) so
+  // that the ravine reads as part of the water system.
+  { id: 'raviner', kind: 'wms', group: 'ravines', svc: 'ngu_landform', layers: 'Landformlinjer_leirravine', opacity: 1, on: true,
+    tint: BLUE, thicken: 1,
     name: { no: 'Leirraviner', en: 'Clay ravines' }, src: 'NGU · Landformer' }
 ];
-const GROUPS = ['ravines', 'ground', 'nature', 'hazard', 'lub'];
-const GROUP_KEY = { ravines: 'g_ravines', ground: 'g_ground', nature: 'g_nature', hazard: 'g_hazard', lub: 'g_lub' };
+const GROUPS = ['ravines', 'water', 'ground', 'nature', 'hazard', 'lub'];
+const GROUP_KEY = { ravines: 'g_ravines', water: 'g_water', ground: 'g_ground', nature: 'g_nature', hazard: 'g_hazard', lub: 'g_lub' };
 
 // LUB's own records. Empty until the data model is filled in; see README.
-const OWN = { id: 'lub-raviner', group: 'lub', url: 'data/ravines.geojson', on: true,
+const OWN = { id: 'lub-raviner', group: 'lub', url: 'data/ravines.geojson',
   name: { no: 'Våre registreringer', en: 'Our records' }, src: 'LUB' };
 
 const wmsTile = (svc, layers) => WMS[svc].url
@@ -276,16 +319,49 @@ const wmsTile = (svc, layers) => WMS[svc].url
 const wmsLegend = (svc, layer) => WMS[svc].url
   + '?service=WMS&version=1.3.0&request=GetLegendGraphic&format=image/png&sld_version=1.1.0&layer=' + encodeURIComponent(layer);
 
+// ── Recolouring a WMS ──────────────────────────────────────────────────
+// tint://RRGGBB/k/<url>: fetch the tile, thicken its marks by k px, and
+// paint every mark in one colour, keeping its alpha.
+maplibregl.addProtocol('tint', async (params, abort) => {
+  const m = /^tint:\/\/([0-9a-f]{6})\/(\d)\/(.+)$/i.exec(params.url);
+  const res = await fetch(m[3], { signal: abort.signal });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const bmp = await createImageBitmap(await res.blob());
+  const c = new OffscreenCanvas(bmp.width, bmp.height), x = c.getContext('2d');
+  const k = +m[2];
+  for (let dx = -k; dx <= k; dx++) for (let dy = -k; dy <= k; dy++)
+    if (Math.abs(dx) + Math.abs(dy) <= k) x.drawImage(bmp, dx, dy);
+  x.globalCompositeOperation = 'source-in';
+  x.fillStyle = '#' + m[1]; x.fillRect(0, 0, c.width, c.height);
+  return { data: await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer() };
+});
+const overlayTiles = o => o.tint
+  ? 'tint://' + o.tint.slice(1) + '/' + (o.thicken || 0) + '/' + wmsTile(o.svc, o.layers)
+  : wmsTile(o.svc, o.layers);
+
+// ── Elevation: one DEM for relief and contours ─────────────────────────
+const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+let dem = null;
+try {
+  dem = new mlcontour.DemSource({ url: DEM_URL, encoding: 'terrarium', maxzoom: 15, worker: true, cacheSize: 120, timeoutMs: 15000 });
+  dem.setupMaplibre(maplibregl);
+} catch (e) { console.warn('Contours unavailable:', e); dem = null; }
+
 // ── Background maps ────────────────────────────────────────────────────
+// System: dark ground, the relief, and Kartverket's map inverted and faint,
+// so names and roads stay legible without competing with the water.
 const BASEMAPS = [
-  { id: 'gray', name: { no: 'Kart', en: 'Map' } },
-  { id: 'aerial', name: { no: 'Flyfoto', en: 'Aerial' } },
-  { id: 'relief', name: { no: 'Relieff', en: 'Relief' } }
+  { id: 'system', tone: 'dark',  name: { no: 'System', en: 'System' } },
+  { id: 'gray',   tone: 'light', name: { no: 'Kart', en: 'Map' } },
+  { id: 'aerial', tone: 'light', name: { no: 'Flyfoto', en: 'Aerial' } },
+  { id: 'relief', tone: 'light', name: { no: 'Relieff', en: 'Relief' } }
 ];
-let basemap = 'gray';
+let basemap = 'system';
+const tone = () => BASEMAPS.find(b => b.id === basemap).tone;
 
 const style = {
   version: 8,
+  glyphs: new URL('assets/glyphs/', location.href).href + '{fontstack}/{range}.pbf',
   sources: {
     gray: { type: 'raster', tileSize: 256, maxzoom: 18,
       tiles: ['https://cache.kartverket.no/v1/wmts/1.0.0/topograatone/default/webmercator/{z}/{y}/{x}.png'],
@@ -293,41 +369,98 @@ const style = {
     aerial: { type: 'raster', tileSize: 256, maxzoom: 19,
       tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
       attribution: '© <a href="https://www.esri.com">Esri</a>' },
-    // Kartverket's shaded relief of the 1 m model, close in; further out the
-    // relief is shaded here from the national 10 m model.
     relief1m: { type: 'raster', tileSize: 512, minzoom: 12, maxzoom: 17,
       tiles: ['https://wms.geonorge.no/skwms1/wms.hoyde-dtm-nhm-25833?service=WMS&version=1.3.0&request=GetMap'
         + '&layers=NHM_DTM_25833%3Askyggerelieff&styles=&format=image%2Fpng&crs=EPSG%3A3857&width=512&height=512&bbox={bbox-epsg-3857}'],
       attribution: '© <a href="https://kartverket.no">Kartverket</a>' },
     dem: { type: 'raster-dem', encoding: 'terrarium', tileSize: 256, maxzoom: 15,
-      tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+      tiles: [dem ? dem.sharedDemProtocolUrl : DEM_URL],
       attribution: 'Høyde: Kartverket / Tilezen' }
   },
   layers: [
-    { id: 'ground', type: 'background', paint: { 'background-color': '#e9e9ec' } },
-    { id: 'gray', type: 'raster', source: 'gray', layout: { visibility: 'visible' } },
+    { id: 'ground', type: 'background', paint: { 'background-color': '#1b1b1e' } },
+    // System: the grey map turned negative, faint.
+    { id: 'gray-neg', type: 'raster', source: 'gray',
+      paint: { 'raster-brightness-min': 1, 'raster-brightness-max': 0, 'raster-saturation': -1, 'raster-opacity': 0.42, 'raster-contrast': 0.1 } },
+    { id: 'gray', type: 'raster', source: 'gray', layout: { visibility: 'none' } },
     { id: 'aerial', type: 'raster', source: 'aerial', layout: { visibility: 'none' } },
-    { id: 'relief-shade', type: 'hillshade', source: 'dem', layout: { visibility: 'none' },
-      paint: { 'hillshade-illumination-direction': 315, 'hillshade-exaggeration': 0.8,
-               'hillshade-shadow-color': '#000000', 'hillshade-highlight-color': '#ffffff', 'hillshade-accent-color': '#000000' } },
-    { id: 'relief1m', type: 'raster', source: 'relief1m', minzoom: 12, layout: { visibility: 'none' },
-      paint: { 'raster-contrast': 0.3, 'raster-opacity': ['interpolate', ['linear'], ['zoom'], 12, 0, 13, 1] } }
+    { id: 'shade', type: 'hillshade', source: 'dem',
+      paint: { 'hillshade-illumination-direction': 315, 'hillshade-exaggeration': 0.55,
+               'hillshade-shadow-color': '#000000', 'hillshade-highlight-color': '#5a5a60', 'hillshade-accent-color': '#000000' } },
+    // Kartverket's 1 m relief close in: on System it is darkened and laid
+    // over the ground, so the ravine walls themselves are visible.
+    { id: 'relief1m', type: 'raster', source: 'relief1m', minzoom: 12,
+      paint: { 'raster-brightness-max': 0.42, 'raster-contrast': 0.25,
+               'raster-opacity': ['interpolate', ['linear'], ['zoom'], 12, 0, 13, 0.85] } }
   ]
 };
-const BASE_LAYERS = { gray: ['gray'], aerial: ['aerial'], relief: ['relief-shade', 'relief1m'] };
+// Which background layers each background shows, and how they are painted.
+const BASE_LAYERS = {
+  system: ['gray-neg', 'shade', 'relief1m'],
+  gray:   ['gray'],
+  aerial: ['aerial'],
+  relief: ['shade', 'relief1m']
+};
+const BASE_PAINT = {
+  dark: {
+    ground: '#1b1b1e',
+    shade: { 'hillshade-shadow-color': '#000000', 'hillshade-highlight-color': '#5a5a60', 'hillshade-exaggeration': 0.55 },
+    relief1m: { 'raster-brightness-max': 0.42, 'raster-contrast': 0.25 }
+  },
+  light: {
+    ground: '#c9c9cc',
+    shade: { 'hillshade-shadow-color': '#000000', 'hillshade-highlight-color': '#ffffff', 'hillshade-exaggeration': 0.8 },
+    relief1m: { 'raster-brightness-max': 1, 'raster-contrast': 0.3 }
+  }
+};
 
-OVERLAYS.forEach(o => {
-  style.sources[o.id] = { type: 'raster', tileSize: 512, tiles: [wmsTile(o.svc, o.layers)], attribution: WMS[o.svc].attr };
-  style.layers.push({ id: o.id, type: 'raster', source: o.id,
-    layout: { visibility: o.on ? 'visible' : 'none' }, paint: { 'raster-opacity': o.opacity, 'raster-fade-duration': 0 } });
+OVERLAYS.filter(o => o.kind === 'wms').forEach(o => {
+  style.sources[o.id] = { type: 'raster', tileSize: 512, tiles: [overlayTiles(o)], attribution: WMS[o.svc].attr };
 });
+Object.entries(FEEDS).forEach(([k, f]) => {
+  style.sources['feed-' + k] = { type: 'geojson', data: { type: 'FeatureCollection', features: [] }, attribution: f.attr };
+});
+if (dem) style.sources.contours = { type: 'vector', maxzoom: 15, attribution: '',
+  tiles: [dem.contourProtocolUrl({
+    thresholds: { 10: [50, 250], 11: [20, 100], 12: [10, 50], 13: [5, 25], 14: [5, 25], 15: [5, 25] },
+    elevationKey: 'ele', levelKey: 'level', contourLayer: 'contours', overzoom: 1
+  })] };
+
+// One or more map layers per overlay, in stack order.
+function layersFor(o) {
+  const vis = { visibility: o.on ? 'visible' : 'none' };
+  const w = WATER.dark;
+  if (o.kind === 'wms') return [{ id: o.id, type: 'raster', source: o.id, layout: vis,
+    paint: { 'raster-opacity': o.opacity, 'raster-fade-duration': 0 } }];
+  if (o.kind === 'contours') return dem ? [
+    { id: 'hoydekurver', type: 'line', source: 'contours', 'source-layer': 'contours', minzoom: 10, layout: { ...vis, 'line-join': 'round' },
+      paint: { 'line-color': ['case', ['>', ['get', 'level'], 0], w.index, w.contour],
+               'line-width': ['case', ['>', ['get', 'level'], 0], 0.9, 0.5] } },
+    { id: 'hoydekurver-tall', type: 'symbol', source: 'contours', 'source-layer': 'contours', minzoom: 12,
+      filter: ['>', ['get', 'level'], 0],
+      layout: { ...vis, 'symbol-placement': 'line', 'text-field': ['concat', ['number-format', ['get', 'ele'], {}], ''],
+                'text-font': ['Inter Regular'], 'text-size': 10, 'text-max-angle': 30, 'symbol-spacing': 320 },
+      paint: { 'text-color': w.label, 'text-halo-color': w.halo, 'text-halo-width': 1.2 } }
+  ] : [];
+  if (o.feed === 'lakes') return [{ id: o.id, type: 'fill', source: 'feed-lakes', layout: vis,
+    paint: { 'fill-color': w.lake, 'fill-antialias': true } }];
+  if (o.feed === 'streams') return [{ id: o.id, type: 'line', source: 'feed-streams', layout: { ...vis, 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': w.stream,
+      'line-width': ['interpolate', ['linear'], ['zoom'],
+        9,  ['interpolate', ['linear'], ['coalesce', ['get', 'elveordenstrahler'], 1], 1, 0.3, 3, 0.6, 6, 1.8],
+        13, ['interpolate', ['linear'], ['coalesce', ['get', 'elveordenstrahler'], 1], 1, 0.9, 3, 1.6, 6, 3.5],
+        16, ['interpolate', ['linear'], ['coalesce', ['get', 'elveordenstrahler'], 1], 1, 1.6, 3, 3, 6, 6]] } }];
+  return [];
+}
+OVERLAYS.forEach(o => style.layers.push(...layersFor(o)));
+const mapLayersOf = o => layersFor(o).map(l => l.id);
 
 // ── The map ────────────────────────────────────────────────────────────
 let map;
 try {
   map = new maplibregl.Map({
     container: 'map', style: style,
-    center: [10.92, 59.97], zoom: 10.2, minZoom: 6, maxZoom: 19, maxPitch: 70,
+    center: [10.97, 59.975], zoom: 11.3, minZoom: 6, maxZoom: 19, maxPitch: 70,
     hash: 'v', attributionControl: false, dragRotate: true, touchPitch: true
   });
 } catch (err) {
@@ -339,30 +472,98 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bott
 map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
 map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
+const OWN_LAYERS = [OWN.id + '-fill', OWN.id + '-line', OWN.id + '-point'];
+let ownCount = null;
+
 map.on('load', () => {
   // The attribution starts folded into its (i); it opens on a tap.
   document.querySelectorAll('.maplibregl-ctrl-attrib').forEach(el => el.classList.remove('maplibregl-compact-show'));
   map.addSource(OWN.id, { type: 'geojson', data: OWN.url, attribution: 'Laboratory for Urban Boundaries' });
   map.addLayer({ id: OWN.id + '-fill', type: 'fill', source: OWN.id, filter: ['==', ['geometry-type'], 'Polygon'],
-    paint: { 'fill-color': '#0a84ff', 'fill-opacity': 0.15 } });
+    paint: { 'fill-color': '#ff9f0a', 'fill-opacity': 0.18 } });
   map.addLayer({ id: OWN.id + '-line', type: 'line', source: OWN.id,
-    paint: { 'line-color': '#0a84ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.5, 16, 4] } });
+    paint: { 'line-color': '#ff9f0a', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.5, 16, 4] } });
   map.addLayer({ id: OWN.id + '-point', type: 'circle', source: OWN.id, filter: ['==', ['geometry-type'], 'Point'],
-    paint: { 'circle-color': '#ffffff', 'circle-stroke-color': '#0a84ff', 'circle-stroke-width': 2, 'circle-radius': 5 } });
-  fetch(OWN.url).then(r => r.json()).then(fc => {
-    ownCount = (fc.features || []).length; renderPanel();
-  }).catch(() => {});
+    paint: { 'circle-color': '#ffffff', 'circle-stroke-color': '#ff9f0a', 'circle-stroke-width': 2, 'circle-radius': 5 } });
+  fetch(OWN.url).then(r => r.json()).then(fc => { ownCount = (fc.features || []).length; renderPanel(); }).catch(() => {});
+  setBasemap(basemap);
+  refreshFeeds();
 });
-const OWN_LAYERS = [OWN.id + '-fill', OWN.id + '-line', OWN.id + '-point'];
-let ownCount = null;
+
+// ── Vector feeds, loaded by tile as the map moves ──────────────────────
+const feedState = {};
+Object.keys(FEEDS).forEach(k => { feedState[k] = { done: new Set(), byId: new Map(), timer: null }; });
+const lon2x = (lon, z) => Math.floor((lon + 180) / 360 * 2 ** z);
+const lat2y = (lat, z) => { const r = lat * Math.PI / 180; return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 2 ** z); };
+const x2lon = (x, z) => x / 2 ** z * 360 - 180;
+const y2lat = (y, z) => { const n = Math.PI - 2 * Math.PI * y / 2 ** z; return 180 / Math.PI * Math.atan(Math.sinh(n)); };
+
+function feedOn(k) { return OVERLAYS.some(o => o.feed === k && state.on.has(o.id)); }
+function refreshFeeds() { Object.keys(FEEDS).forEach(loadFeed); }
+
+async function loadFeed(k) {
+  const f = FEEDS[k], s = feedState[k], z = map.getZoom();
+  if (!feedOn(k) || z < f.minzoom) return;
+  const tz = f.tz(z), b = map.getBounds();
+  const x0 = lon2x(b.getWest(), tz), x1 = lon2x(b.getEast(), tz);
+  const y0 = lat2y(Math.min(b.getNorth(), 85), tz), y1 = lat2y(Math.max(b.getSouth(), -85), tz);
+  const todo = [];
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+    const key = tz + '/' + x + '/' + y;
+    if (!s.done.has(key)) todo.push([key, x, y]);
+  }
+  if (!todo.length || todo.length > 80) return;
+  // Keep memory bounded: start over if the store has grown very large.
+  if (s.byId.size > 60000) { s.byId.clear(); s.done.clear(); }
+  const queue = todo.slice();
+  const worker = async () => {
+    while (queue.length) {
+      const [key, x, y] = queue.shift();
+      s.done.add(key);
+      const env = [x2lon(x, tz), y2lat(y + 1, tz), x2lon(x + 1, tz), y2lat(y, tz)].map(v => v.toFixed(6)).join(',');
+      const q = new URLSearchParams({ where: f.where(tz), geometry: env, geometryType: 'esriGeometryEnvelope', inSR: '4326',
+        spatialRel: 'esriSpatialRelIntersects', outFields: f.fields, returnGeometry: 'true', outSR: '4326',
+        geometryPrecision: '5', maxAllowableOffset: tz >= 12 ? '0.00001' : '0.00008', f: 'geojson' });
+      try {
+        const r = await fetch(f.url + '?' + q);
+        const j = await r.json();
+        (j.features || []).forEach(ft => {
+          const id = ft.id ?? (ft.properties && ft.properties.objectid);
+          if (id != null && !s.byId.has(id)) s.byId.set(id, ft);
+        });
+      } catch (e) { s.done.delete(key); }
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  const src = map.getSource('feed-' + k);
+  if (src) src.setData({ type: 'FeatureCollection', features: [...s.byId.values()] });
+}
+let moveTimer = null;
+map.on('moveend', () => { clearTimeout(moveTimer); moveTimer = setTimeout(refreshFeeds, 250); });
 
 // ── Panel ──────────────────────────────────────────────────────────────
 const state = { on: new Set(OVERLAYS.filter(o => o.on).map(o => o.id)), own: true, legends: new Set() };
 
+function paintForTone() {
+  const w = WATER[tone()], p = BASE_PAINT[tone()];
+  map.setPaintProperty('ground', 'background-color', p.ground);
+  Object.entries(p.shade).forEach(([k, v]) => map.setPaintProperty('shade', k, v));
+  Object.entries(p.relief1m).forEach(([k, v]) => map.setPaintProperty('relief1m', k, v));
+  if (map.getLayer('elver')) map.setPaintProperty('elver', 'line-color', w.stream);
+  if (map.getLayer('innsjoer')) map.setPaintProperty('innsjoer', 'fill-color', w.lake);
+  if (map.getLayer('hoydekurver')) {
+    map.setPaintProperty('hoydekurver', 'line-color', ['case', ['>', ['get', 'level'], 0], w.index, w.contour]);
+    map.setPaintProperty('hoydekurver-tall', 'text-color', w.label);
+    map.setPaintProperty('hoydekurver-tall', 'text-halo-color', w.halo);
+  }
+}
 function setBasemap(id) {
   basemap = id;
-  Object.entries(BASE_LAYERS).forEach(([k, ids]) =>
-    ids.forEach(l => map.setLayoutProperty(l, 'visibility', k === id ? 'visible' : 'none')));
+  const show = new Set(BASE_LAYERS[id]);
+  ['gray-neg', 'gray', 'aerial', 'shade', 'relief1m'].forEach(l =>
+    map.setLayoutProperty(l, 'visibility', show.has(l) ? 'visible' : 'none'));
+  paintForTone();
+  document.documentElement.dataset.map = tone();
   renderBasemaps();
 }
 function renderBasemaps() {
@@ -409,6 +610,8 @@ function renderPanel() {
       sec.appendChild(row(o, state.on.has(o.id), on => toggleOverlay(o, on), (r, text) => {
         const hint = document.createElement('div'); hint.className = 'row-hint'; hint.textContent = t('zoom_in');
         text.appendChild(hint);
+        if (o.note) { const n = document.createElement('div'); n.className = 'row-src'; n.textContent = t(o.note); text.appendChild(n); }
+        if (o.kind !== 'wms') return;
         const lb = document.createElement('button'); lb.type = 'button'; lb.className = 'legend-btn';
         const open = state.legends.has(o.id);
         lb.textContent = open ? t('legend_hide') : t('legend');
@@ -437,7 +640,8 @@ function renderPanel() {
 
 function toggleOverlay(o, on) {
   on ? state.on.add(o.id) : state.on.delete(o.id);
-  map.setLayoutProperty(o.id, 'visibility', on ? 'visible' : 'none');
+  mapLayersOf(o).forEach(l => map.getLayer(l) && map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'));
+  if (on && o.kind === 'feed') loadFeed(o.feed);
   renderPanel();
 }
 function updateRanges() {
@@ -464,10 +668,11 @@ function setSheet(collapsed) {
 sheetBtn.addEventListener('click', () => setSheet(!panel.classList.contains('collapsed')));
 if (phone.matches) setSheet(true);
 
-// ── What lies here: GetFeatureInfo on the visible overlays ─────────────
-// A small window around the click at the map's own resolution, so the query
-// holds when the map is turned or tilted. The services answer in HTML, which
-// is shown in a sandboxed frame: their markup never runs in this page.
+// ── What lies here ─────────────────────────────────────────────────────
+// Our records and NVE's water from the map itself; the WMS layers through
+// GetFeatureInfo, in a small window around the click at the map's own
+// resolution, so the query holds when the map is turned or tilted. Their
+// HTML is shown in a sandboxed frame: it never runs in this page.
 const info = document.getElementById('info');
 document.getElementById('info-close').addEventListener('click', () => info.classList.remove('open'));
 
@@ -490,6 +695,15 @@ function hit(title) {
   const h = document.createElement('h3'); h.textContent = title; d.appendChild(h);
   return d;
 }
+function props(pairs) {
+  const dl = document.createElement('dl'); dl.className = 'props';
+  pairs.forEach(([k, v]) => {
+    if (v === null || v === undefined || v === '') return;
+    const row = document.createElement('div'); const dt = document.createElement('dt'); const dd = document.createElement('dd');
+    dt.textContent = k; dd.textContent = v; row.append(dt, dd); dl.appendChild(row);
+  });
+  return dl;
+}
 
 map.on('click', e => {
   const body = document.getElementById('info-body');
@@ -502,21 +716,33 @@ map.on('click', e => {
   let found = 0, pending = 0;
   const status = document.createElement('p'); status.className = 'muted'; body.appendChild(status);
   const done = () => { if (--pending === 0 && !found) status.textContent = t('nothing'); else if (pending === 0) status.remove(); };
+  const box = [[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]];
 
-  // Our own records first.
-  if (state.own) map.queryRenderedFeatures(e.point, { layers: OWN_LAYERS.filter(l => map.getLayer(l)) }).forEach(f => {
+  if (state.own) map.queryRenderedFeatures(box, { layers: OWN_LAYERS.filter(l => map.getLayer(l)) }).forEach(f => {
     const d = hit(f.properties.name || f.properties.ravine_id || OWN.name[lang]);
-    const dl = document.createElement('dl'); dl.className = 'props';
-    Object.entries(f.properties).forEach(([k, v]) => {
-      const row = document.createElement('div'); const dt = document.createElement('dt'); const dd = document.createElement('dd');
-      dt.textContent = k; dd.textContent = v; row.append(dt, dd); dl.appendChild(row);
-    });
-    d.appendChild(dl); body.appendChild(d); found++;
+    d.appendChild(props(Object.entries(f.properties))); body.appendChild(d); found++;
+  });
+  const water = ['elver', 'innsjoer'].filter(l => map.getLayer(l) && state.on.has(l));
+  const seen = new Set();
+  map.queryRenderedFeatures(box, { layers: water }).forEach(f => {
+    const key = f.layer.id + ':' + (f.id ?? f.properties.objectid);
+    if (seen.has(key)) return; seen.add(key);
+    const p = f.properties;
+    if (f.layer.id === 'elver') {
+      const d = hit((p.elvenavn || t('unnamed')) + ' · NVE');
+      d.appendChild(props([[t('river'), p.objekttype], [t('order'), p.elveordenstrahler]]));
+      body.appendChild(d);
+    } else {
+      const d = hit((p.navn || p.NAVN || t('unnamed')) + ' · NVE');
+      d.appendChild(props([[t('lake'), p.vatnLnr || p.vatnlnr || ''], ['km²', p.areal_km2 || p.arealKm2 || '']]));
+      body.appendChild(d);
+    }
+    found++;
   });
 
   const z = map.getZoom();
-  const visible = OVERLAYS.filter(o => state.on.has(o.id) && !(o.from && z < o.from)).reverse();
-  if (!visible.length) { status.textContent = found ? '' : t('none_visible'); return; }
+  const visible = OVERLAYS.filter(o => o.kind === 'wms' && state.on.has(o.id) && !(o.from && z < o.from)).reverse();
+  if (!visible.length) { status.textContent = found ? '' : t('none_visible'); if (found) status.remove(); return; }
   status.textContent = t('loading');
   pending = visible.length;
   visible.forEach(o => {

@@ -14,6 +14,12 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const BASE = process.env.RK_URL || 'http://127.0.0.1:8902/index.html';
 const LIB = path.join(ROOT, 'node_modules', 'maplibre-gl', 'dist');
+const CONTOUR = path.join(ROOT, 'node_modules', 'maplibre-contour', 'dist', 'index.min.js');
+// A flat terrarium tile (100 m everywhere), so the contour worker has real input.
+const DEM = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAAB/klEQVR42u3TQQ0AAAgDsYlFCNL3xwJNquCSy07gLQkwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADIABVMAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABMIAEGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAbAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHgKOOsDV3QomQiAAAAAElFTkSuQmCC', 'base64');
+const RIVERS = JSON.stringify({ type: 'FeatureCollection', features: [
+  { type: 'Feature', id: 1, properties: { objectid: 1, elvenavn: 'Testbekken', elveordenstrahler: 3, objekttype: 'ElvBekk' },
+    geometry: { type: 'LineString', coordinates: [[10.90, 59.95], [11.05, 60.00]] } }] });
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 let failed = 0;
@@ -21,7 +27,7 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
 
 (async () => {
   fs.mkdirSync(path.join(ROOT, 'outputs'), { recursive: true });
-  const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });
+  const browser = await chromium.launch({ executablePath: process.env.RK_CHROME || undefined, args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });
 
   for (const [label, w, h] of [['desktop', 1440, 900], ['phone', 390, 844]]) {
     const page = await browser.newPage({ viewport: { width: w, height: h } });
@@ -33,6 +39,9 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
       const u = route.request().url();
       if (u.startsWith('http://127.0.0.1')) return route.continue();
       if (u.includes('maplibre-gl.js')) return route.fulfill({ path: path.join(LIB, 'maplibre-gl.js'), contentType: 'text/javascript' });
+      if (u.includes('maplibre-contour')) return route.fulfill({ path: CONTOUR, contentType: 'text/javascript' });
+      if (u.includes('/query?')) return route.fulfill({ body: RIVERS, contentType: 'application/json' });
+      if (u.includes('terrarium')) return route.fulfill({ body: DEM, contentType: 'image/png' });
       if (u.includes('maplibre-gl.css')) return route.fulfill({ path: path.join(LIB, 'maplibre-gl.css'), contentType: 'text/css' });
       if (u.includes('fonts.g')) return route.fulfill({ body: '', contentType: 'text/css' });
       if (/GetFeatureInfo/.test(u)) return route.fulfill({ body: '<table><tr><th>navn</th><td>Testravine</td></tr></table>', contentType: 'text/html' });
@@ -44,7 +53,7 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
     await page.waitForTimeout(1500);
 
     const n = await page.$$eval('.switch', s => s.length);
-    check(n === 10, `${label}: 10 layer switches (9 services + our records), found ${n}`);
+    check(n === 14, `${label}: 14 layer switches (13 layers + our records), found ${n}`);
     check(await page.$eval('.panel', el => !!el), `${label}: panel present`);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     check(!overflow, `${label}: no horizontal scroll`);
@@ -61,8 +70,12 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
     check(await page.$eval('.row[data-id="marin-grense"] .switch', s => s.getAttribute('aria-checked')) === 'true', `${label}: switch turns a layer on`);
     await page.click('.lang button[data-lang="en"]');
     check(await page.$eval('.panel-head h1 + .lang, h1', () => document.querySelector('[data-t="g_background"]').textContent) === 'Background', `${label}: English labels`);
+    check(await page.$eval('#basemaps button:nth-child(1)', b => b.getAttribute('aria-pressed')) === 'true', `${label}: starts on the System background`);
+    check(await page.evaluate(() => document.documentElement.dataset.map) === 'dark', `${label}: System is the dark tone`);
     await page.click('#basemaps button:nth-child(2)');
     check(await page.$eval('#basemaps button:nth-child(2)', b => b.getAttribute('aria-pressed')) === 'true', `${label}: background switches`);
+    check(await page.evaluate(() => document.documentElement.dataset.map) === 'light', `${label}: Map is the light tone`);
+    await page.click('#basemaps button:nth-child(1)');
 
     // Point query.
     await page.mouse.click(Math.round(w * 0.7), Math.round(h * 0.35));

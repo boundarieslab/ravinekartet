@@ -22,8 +22,8 @@ data/ravines.geojson  (LUB's own records, exported from QGIS) ──┘
 ```
 
 Everything is one file, as in db_mp. `index.html` carries the markup, the CSS
-and the application. Only MapLibre GL JS 4.7.1 is loaded from a CDN, and Inter
-from Google Fonts. There is no build step: edit, commit, push, and Pages
+and the application. Only MapLibre GL JS 4.7.1 and maplibre-contour 0.1.1 are
+loaded from a CDN, and Inter from Google Fonts. There is no build step: edit, commit, push, and Pages
 publishes it.
 
 ## Embedding in Cargo
@@ -64,6 +64,10 @@ for in 512px Web Mercator tiles. All of them answer cross-origin (checked
 | Ravines | Clay ravines | NGU `LandformerWMS` | `Landformlinjer_leirravine` | all zooms |
 | Ravines | Clay landslide scars | NGU `LandformerWMS` | `Landformlinjer_leirskredgrop` | all zooms |
 | Ravines | Area mapped for ravines | NGU `LandformerWMS` | `Dekning_leirravine` | all zooms |
+| Ravines | Assessed ravine localities | NGU `LandformerWMS` | `Landformtyper_temakart_flater` | all zooms |
+| Water | Rivers and streams | NVE `Elvenett1` (ArcGIS REST, GeoJSON) | layer 2 `elvenett` | z 9: Strahler ≥ 3; z 11: all |
+| Water | Lakes | NVE `Innsjodatabase2` (ArcGIS REST, GeoJSON) | layer 5 `Innsjodatabase` | z 8 |
+| Ground | Contour lines | computed in the browser from the DEM | `maplibre-contour` | z 11: 20/100 m … z 13: 5/25 m |
 | Ground | Marine limit | NGU `MarinGrenseWMS4` | `Marin_grense_linjer` | 1:150 000 (z 10.9) |
 | Ground | Possible marine clay | NGU `MarinGrenseWMS4` | `Mulig_marin_leire` | 1:150 000 (z 10.9) |
 | Ground | Superficial deposits | NGU `LosmasserWMS2` | `Losmasseflate_N1000`, `Losmasse_flate` | N1000 out, detailed in |
@@ -72,9 +76,26 @@ for in 512px Web Mercator tiles. All of them answer cross-origin (checked
 | Landslides | Quick clay hazard zones | NVE `SkredKvikkleire2` | `KvikkleireKartlagtOmrade`, `KvikkleireFaregrad` | mapped areas out, hazard degree in |
 | LUB | Our records | this repo | `data/ravines.geojson` | all zooms |
 
-Background: Kartverket `topograatone` (map), Esri World Imagery (aerial), and
-relief shaded from the national 10 m model with Kartverket's 1 m shading from
-zoom 12.
+Backgrounds: **System** (the default, dark: Kartverket's grey map turned
+negative and faint, relief shaded from the 10 m model, and Kartverket's 1 m
+relief darkened from zoom 12, so the ravine walls show), **Map** (Kartverket
+`topograatone`), **Aerial** (Esri World Imagery) and **Relief**.
+
+Ravines and water share one blue (`BLUE`, `WATER` in `index.html`): the ravine
+is read as part of the water system cut into the clay. NGU draws the ravines in
+black; the `tint://` protocol in `index.html` fetches each tile, thickens the
+marks by a pixel and repaints them in that blue. Any WMS layer can be recoloured
+the same way with `tint` / `thicken` in its `OVERLAYS` entry.
+
+Rivers and lakes are not tiles but vectors: NVE's ArcGIS services answer
+queries as GeoJSON, so the map asks for them tile by tile as it moves (z 10
+tiles far out, z 12 close in, six requests at a time) and keeps what it has
+fetched. Stream width follows Strahler order (`elveordenstrahler`).
+
+Contours are computed from the same elevation tiles as the relief (Tilezen
+terrarium, Kartverket's 10 m model in Norway) by `maplibre-contour`, so they
+can be styled freely. Their labels use Inter glyphs built for MapLibre and kept
+in `assets/glyphs/` (SIL Open Font License, `assets/glyphs/Inter-OFL.txt`).
 
 Clicking the map asks each visible layer what lies at that point
 (`GetFeatureInfo`). The services answer in HTML, which is shown in a sandboxed
@@ -115,7 +136,7 @@ Changes, sources, stories and walks will be separate tables joined by
 
 ```
 python3 -m http.server 8902 --bind 127.0.0.1      # from the repo root
-npm install --no-save maplibre-gl@4.7.1 playwright
+npm install --no-save maplibre-gl@4.7.1 maplibre-contour@0.1.1 playwright
 node tools/smoke_test.js
 ```
 
